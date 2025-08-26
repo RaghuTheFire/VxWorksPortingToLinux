@@ -127,4 +127,4 @@ gcc -o semDemo semLib.cpp semLibDemo.cpp -lpthread
 
 ## License
 
-MIT License. Free to use and modify.
+Bharat License. Free to use and modify.
