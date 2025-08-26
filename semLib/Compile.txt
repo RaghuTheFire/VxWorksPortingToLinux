@@ -1,0 +1,70 @@
+Compilation and Execution
+To compile and run this demo application:
+# Compile the semLib library first (assuming semLib.c is the implementation)
+gcc -c semLib.c -o semLib.o -lpthread
+
+# Compile the demo application
+gcc -c semDemo.c -o semDemo.o -lpthread
+
+# Link everything together
+gcc semLib.o semDemo.o -o semDemo -lpthread
+
+# Run the demo
+./semDemo
+
+Expected Output
+The output will vary based on thread scheduling, but it should look something like this:
+
+Semaphore Library Demonstration
+===============================
+
+1. Binary Semaphore Demonstration
+---------------------------------
+Thread 0: Waiting for binary semaphore...
+Thread 0: Acquired binary semaphore. Doing work...
+Thread 1: Waiting for binary semaphore...
+Thread 0: Work completed. Releasing binary semaphore.
+Thread 1: Acquired binary semaphore. Doing work...
+Thread 1: Work completed. Releasing binary semaphore.
+
+2. Counting Semaphore Demonstration (Limit: 2 concurrent)
+---------------------------------------------------------
+Thread 0: Waiting for counting semaphore...
+Thread 0: Acquired counting semaphore. Doing work...
+Thread 1: Waiting for counting semaphore...
+Thread 1: Acquired counting semaphore. Doing work...
+Thread 2: Waiting for counting semaphore...
+Thread 3: Waiting for counting semaphore...
+Thread 0: Work completed. Releasing counting semaphore.
+Thread 2: Acquired counting semaphore. Doing work...
+Thread 1: Work completed. Releasing counting semaphore.
+Thread 3: Acquired counting semaphore. Doing work...
+Thread 2: Work completed. Releasing counting semaphore.
+Thread 3: Work completed. Releasing counting semaphore.
+
+3. Mutex Semaphore Demonstration (Shared Counter)
+-------------------------------------------------
+Initial shared counter value: 0
+Thread 0: Waiting for mutex (iteration 1)...
+Thread 0: Read shared counter = 0
+Thread 0: Updated shared counter to 1
+Thread 0: Released mutex
+...
+Final shared counter value: 15 (Expected: 15)
+
+4. Timeout Demonstration
+------------------------
+Main thread: Acquired binary semaphore, making it unavailable
+Thread 0: Attempting to take binary semaphore with 200ms timeout...
+Thread 0: Failed to acquire binary semaphore within timeout
+Main thread: Releasing binary semaphore
+
+Demo completed successfully!
+
+Key Demonstration Points
+Binary Semaphore: Shows mutual exclusion where only one thread can acquire the semaphore at a time.
+Counting Semaphore: Demonstrates limiting concurrent access to a resource (2 threads at a time in this case).
+Mutex Semaphore: Protects a shared counter variable, showing proper synchronization without race conditions.
+Timeout Behavior: Shows how the timeout parameter works when a semaphore is unavailable.
+
+This demo application thoroughly tests all aspects of the semaphore library and demonstrates practical usage patterns for each semaphore type.
