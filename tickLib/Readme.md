@@ -7,12 +7,7 @@ It emulates the VxWorks `tickLib` API, providing a monotonic tick counter and co
 
 ## Download
 
-You can grab the latest source directly from GitHub once this project is pushed:
-
-- **ZIP archive (main branch):**  
-  [Download tickLib.zip](https://github.com/<your-username>/<repo-name>/archive/refs/heads/main.zip)
-
-Or clone it with git:
+clone it with git:
 
 ```bash
 git clone https://github.com/<your-username>/<repo-name>.git
