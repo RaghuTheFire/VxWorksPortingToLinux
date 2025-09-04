@@ -1,129 +1,93 @@
 #include "wdLib.h"
+#include "tickLib.h"
 #include <thread>
-#include <atomic>
-#include <chrono>
 #include <mutex>
 #include <condition_variable>
+#include <chrono>
+#include <atomic>
 
-/**
- * @struct WdControl
- * @brief Internal watchdog control structure
- * 
- * This structure manages the internal state of a watchdog timer,
- * including thread synchronization and cancellation mechanisms.
- */
-struct WdControl 
-{
-    std::thread th;                     ///< Thread running the watchdog timer
-    std::mutex mtx;                     ///< Mutex for synchronization
-    std::condition_variable cv;         ///< Condition variable for cancellation
-    std::atomic<bool> active{false};    ///< Flag indicating if watchdog is active
-    std::atomic<bool> canceled{false};  ///< Flag indicating if watchdog was canceled
+namespace {
+struct WdControl {
+    std::mutex m;
+    std::condition_variable cv;
+    std::thread th;
+    bool active{false};
+    bool canceled{false};
+    uint64_t generation{0};
+    WDOG_HANDLER handler{nullptr};
+    uintptr_t arg{0};
 };
-
-static const int TICKS_PER_SEC = 100;   ///< Timer resolution in ticks per second
-
-/**
- * @brief Creates a new watchdog timer instance
- * @return Handle to the newly created watchdog timer
- * 
- * @note The caller is responsible for deleting the watchdog with wdDelete()
- */
-WDOG_ID wdCreate() 
-{
-    return new WdControl();
 }
 
-/**
- * @brief Deletes a watchdog timer instance
- * @param wdId Handle to the watchdog timer to delete
- * @return 0 on success, -1 on error
- * 
- * @note This function will cancel any active timer before deletion
- */
-int wdDelete(WDOG_ID wdId) 
-{
-    if (!wdId) return -1;
-    auto* wd = static_cast<WdControl*>(wdId);
-    
-    std::lock_guard<std::mutex> lock(wd->mtx);
-    wd->active = false;
-    wd->canceled = true;
-    wd->cv.notify_all();
-    
-    if (wd->th.joinable()) {
-        wd->th.join();
+static void worker(WdControl* wd, uint64_t myGen, int delayTicks) {
+    using namespace std::chrono;
+    int tps = sysClkRateGet(); if (tps <= 0) tps = 60;
+    uint64_t ms = (static_cast<uint64_t>(delayTicks) * 1000ull) / static_cast<uint64_t>(tps);
+    auto deadline = steady_clock::now() + milliseconds(ms);
+    std::unique_lock<std::mutex> lock(wd->m);
+    wd->cv.wait_until(lock, deadline, [&]{
+        return wd->canceled || !wd->active || wd->generation != myGen;
+    });
+    bool shouldFire = wd->active && !wd->canceled && wd->generation == myGen && steady_clock::now() >= deadline;
+    WDOG_HANDLER fn = wd->handler;
+    uintptr_t a = wd->arg;
+    wd->active = false; // one-shot
+    lock.unlock();
+    if (shouldFire && fn) {
+        fn(a);
     }
-    
+}
+
+WDOG_ID wdCreate(void) {
+    try { return new WdControl(); } catch (...) { return nullptr; }
+}
+
+int wdDelete(WDOG_ID id) {
+    if (!id) return -1;
+    WdControl* wd = static_cast<WdControl*>(id);
+    // cancel and join if needed
+    {
+        std::lock_guard<std::mutex> lock(wd->m);
+        wd->canceled = true;
+        wd->active = false;
+        wd->generation++;
+        wd->cv.notify_all();
+    }
+    if (wd->th.joinable()) wd->th.join();
     delete wd;
     return 0;
 }
 
-/**
- * @brief Starts a watchdog timer
- * @param wdId Handle to the watchdog timer
- * @param delayTicks Number of timer ticks before expiration
- * @param func Callback function to execute on expiration
- * @param arg Argument to pass to the callback function
- * @return 0 on success, -1 on error
- * 
- * @note If the timer is already active, it will be canceled first
- * @note The timer will be automatically canceled if wdCancel() is called
- */
-int wdStart(WDOG_ID wdId, int delayTicks, void (*func)(uintptr_t), uintptr_t arg) 
-{
-    if (!wdId || !func || delayTicks <= 0) return -1;
-    auto* wd = static_cast<WdControl*>(wdId);
-
-    // Cancel any existing watchdog
-    wdCancel(wdId);
-
-    wd->active = true;
-    wd->canceled = false;
-    
-    wd->th = std::thread([wd, delayTicks, func, arg]() {
-        std::unique_lock<std::mutex> lock(wd->mtx);
-        auto delay = std::chrono::milliseconds((delayTicks * 1000) / TICKS_PER_SEC);
-        
-        // Wait for either timeout or cancellation
-        if (wd->cv.wait_for(lock, delay, [wd] { return wd->canceled.load(); })) {
-            // Cancelled
-            return;
-        }
-        
-        // Only execute if still active
-        if (wd->active.load()) 
-        {
-            lock.unlock();  // Unlock before callback to avoid potential deadlocks
-            func(arg);
-        }
-    });
-
+int wdCancel(WDOG_ID id) {
+    if (!id) return -1;
+    WdControl* wd = static_cast<WdControl*>(id);
+    {
+        std::lock_guard<std::mutex> lock(wd->m);
+        if (!wd->active) return 0;
+        wd->canceled = true;
+        wd->active = false;
+        wd->generation++;
+        wd->cv.notify_all();
+    }
+    if (wd->th.joinable()) wd->th.join();
     return 0;
 }
 
-/**
- * @brief Cancels an active watchdog timer
- * @param wdId Handle to the watchdog timer to cancel
- * @return 0 on success, -1 on error
- * 
- * @note This function is thread-safe and can be called multiple times
- */
-int wdCancel(WDOG_ID wdId) 
-{
-    if (!wdId) return -1;
-    auto* wd = static_cast<WdControl*>(wdId);
-    
-    std::lock_guard<std::mutex> lock(wd->mtx);
-    wd->canceled = true;
-    wd->cv.notify_all();
-    
-    if (wd->th.joinable()) 
+int wdStart(WDOG_ID id, int delayTicks, WDOG_HANDLER func, uintptr_t arg) {
+    if (!id || !func || delayTicks < 0) return -1;
+    WdControl* wd = static_cast<WdControl*>(id);
+    // cancel any existing timer
+    wdCancel(id);
     {
-        wd->th.join();
+        std::lock_guard<std::mutex> lock(wd->m);
+        wd->handler = func;
+        wd->arg = arg;
+        wd->canceled = false;
+        wd->active = true;
+        wd->generation++;
+        uint64_t gen = wd->generation;
+        // launch worker
+        wd->th = std::thread(worker, wd, gen, delayTicks);
     }
-    
-    wd->active = false;
-    wd->canceled = false;
     return 0;
 }
